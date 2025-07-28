@@ -1,0 +1,17 @@
+tqdm
+opencv-python-headless
+numpy>2.0
+matplotlib
+pillow
+open3d
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.5.1
+torchvision==0.20.1
+torchaudio==2.5.1
+# clip specific dependencies
+fifty
+regex
+# etam specific dependencies
+hydra-core
+# Jupyter kernel
+ipykernel

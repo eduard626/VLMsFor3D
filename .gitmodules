@@ -1,0 +1,3 @@
+[submodule "eTAM"]
+	path = eTAM
+	url = git@github.com:yformer/EfficientTAM.git
