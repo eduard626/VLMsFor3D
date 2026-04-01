@@ -1,7 +1,65 @@
 import os
 import numpy as np
+import cv2
 from scipy.spatial.transform import Rotation as R
-from typing import Optional
+from typing import Optional, Union
+
+
+def load_frame(
+    data_path: str,
+    rgb_file: str,
+    depth_file: str,
+    depth_scale: float = 5000.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Load an RGB-depth frame pair and align their spatial dimensions.
+
+    Args:
+        data_path: Root of the TUM dataset directory.
+        rgb_file: Filename inside ``data_path/rgb/``.
+        depth_file: Filename inside ``data_path/depth/``.
+        depth_scale: Divisor to convert raw depth to metres (TUM default 5000).
+
+    Returns:
+        rgb: (H, W, 3) uint8 RGB image.
+        depth: (H, W) float32 depth in metres.
+    """
+    depth_path = os.path.join(data_path, "depth", depth_file)
+    rgb_path = os.path.join(data_path, "rgb", rgb_file)
+
+    depth = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED).astype(np.float32) / depth_scale
+    rgb = cv2.cvtColor(cv2.imread(rgb_path, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+
+    if rgb.shape[:2] != depth.shape[:2]:
+        rgb = cv2.resize(rgb, (depth.shape[1], depth.shape[0]), interpolation=cv2.INTER_LINEAR)
+
+    return rgb, depth
+
+
+def compute_blur_score(image: Union[np.ndarray, "PIL.Image.Image"]) -> float:
+    """Compute a sharpness score for an image using the variance of the Laplacian.
+
+    Higher values indicate sharper images; lower values indicate blur.
+    Typical ranges depend on image resolution and content, but as a rough
+    guide on 640x480 natural images: <50 is very blurry, 50-200 is
+    moderate, >200 is sharp.
+
+    Args:
+        image: RGB or BGR numpy array (H, W, 3), grayscale array (H, W),
+               or a PIL Image.
+
+    Returns:
+        Laplacian variance (float). This is the score you threshold against.
+    """
+    if not isinstance(image, np.ndarray):
+        image = np.array(image)
+
+    if image.ndim == 3:
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+    else:
+        gray = image
+
+    laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+    return float(laplacian.var())
 
 
 def load_tum_rgb_data(
@@ -90,32 +148,36 @@ def load_tum_rgb_data(
             gt_T.append([tx, ty, tz])
             gt_R.append(rot_mat)
 
-    # filter poses by target timestamps
+    # filter poses by target timestamps, dropping frames without a close match
     if len(rgb_keys) < len(depth_keys):
         ref_stamps = [f.split(".png")[0] for f in image_files]
     else:
         ref_stamps = [f.split(".png")[0] for f in depth_files]
-    indices = []
+
     stamps = np.array(stamps, dtype=np.float64)
+    matched_rgb = []
+    matched_depth = []
+    matched_R = []
+    matched_T = []
     for i in range(len(ref_stamps)):
         stamp = float(ref_stamps[i])
-        # find the closest timestamp in the ground truth poses
         closest_index = np.argmin(np.abs(stamps - stamp))
         closest_stamp = stamps[closest_index]
         if abs(closest_stamp - stamp) < margin:
-            indices.append(closest_index)
-    # sanity check: indices are not empty and are not repeated?
-    if len(indices) == 0:
+            matched_rgb.append(image_files[i])
+            matched_depth.append(depth_files[i])
+            matched_R.append(gt_R[closest_index])
+            matched_T.append(gt_T[closest_index])
+
+    if len(matched_rgb) == 0:
         raise ValueError(
             "No matching ground truth poses found. Please check the dataset."
         )
 
-    assert (
-        indices[0] != indices[len(indices) // 2] and indices[0] != indices[-1]
-    ), "Indices should not be repeated."
-
-    gt_R = [gt_R[i] for i in indices]
-    gt_T = [gt_T[i] for i in indices]
+    image_files = matched_rgb
+    depth_files = matched_depth
+    gt_R = matched_R
+    gt_T = matched_T
 
     gt_T = np.array(gt_T, dtype=np.float32)
     gt_R = np.array(gt_R, dtype=np.float32)
